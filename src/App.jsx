@@ -1,5 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 
+import { db } from './firebase';
+
+import {
+  doc,
+  setDoc,
+  onSnapshot
+} from 'firebase/firestore';
+
 const CRITERIOS = [
   'Calidad Vocal',
   'Afinacion',
@@ -31,25 +39,76 @@ export default function App(){
   // ======== Hooks raíz (siempre en el mismo orden) ========
   const [view,setView] = useState('home'); // home | admin | jurado | final
   const [adminLogueado,setAdminLogueado] = useState(false);
-  const [evento,setEvento] = useState(()=>localStorage.getItem('evento')||'Festival de Corales');
-  const [agrupaciones,setAgrupaciones] = useState(()=>JSON.parse(localStorage.getItem('agrupaciones'))||[]);
-  const [jurados,setJurados] = useState(()=>JSON.parse(localStorage.getItem('jurados_v2'))||[]); // {name,pin}
-  const [evaluaciones,setEvaluaciones] = useState(()=>JSON.parse(localStorage.getItem('evaluaciones'))||{});
-  const [bloqueado,setBloqueado] = useState(()=>JSON.parse(localStorage.getItem('bloqueado'))||false);
+  const [evento,setEvento] = useState('Festival de Corales');
+  const [agrupaciones,setAgrupaciones] = useState([]);
+  const [jurados,setJurados] = useState([]);
+  const [evaluaciones,setEvaluaciones] = useState({});
+  const [bloqueado,setBloqueado] = useState(false);
   const [juradoActivo,setJuradoActivo] = useState(null);
+  const [datosCargados, setDatosCargados] = useState(false);
 
   // 👉 Estado para la REVELACIÓN (0=nada, 1=3º, 2=3º+2º, 3=3º+2º+1º)
   const [revealStep, setRevealStep] = useState(0);
   useEffect(() => { if (view !== 'final') setRevealStep(0); }, [view]);
 
-  // Persistencia
-  useEffect(()=>{
-    localStorage.setItem('evento', evento);
-    localStorage.setItem('agrupaciones', JSON.stringify(agrupaciones));
-    localStorage.setItem('jurados_v2', JSON.stringify(jurados));
-    localStorage.setItem('evaluaciones', JSON.stringify(evaluaciones));
-    localStorage.setItem('bloqueado', JSON.stringify(bloqueado));
-  },[evento,agrupaciones,jurados,evaluaciones,bloqueado]);
+useEffect(() => {
+
+  const unsubscribe = cargarDatos();
+
+  return () => unsubscribe && unsubscribe();
+
+}, []);
+
+function cargarDatos() {
+
+  const ref = doc(db, "concurso", "datos");
+
+ const unsubscribe = onSnapshot(ref, (snap) => {
+
+    if (snap.exists()) {
+
+      const data = snap.data();
+
+      setEvento(data.evento || 'Festival de Corales');
+
+      setJurados(data.jurados || []);
+
+      setAgrupaciones(data.agrupaciones || []);
+
+      setEvaluaciones(data.evaluaciones || {});
+
+      setBloqueado(data.bloqueado || false);
+
+      setDatosCargados(true);
+    }
+
+  });
+     return unsubscribe;
+}
+
+  // Persistencia Firebase
+useEffect(() => {
+
+  if(datosCargados){
+    guardarDatos();
+  }
+
+}, [evento, agrupaciones, jurados, evaluaciones, bloqueado]);
+
+async function guardarDatos() {
+
+  const datos = {
+    evento,
+    jurados,
+    agrupaciones,
+    evaluaciones,
+    bloqueado
+  };
+
+  await setDoc(doc(db, "concurso", "datos"), datos);
+
+  console.log("Datos guardados en Firebase");
+}
 
   // Totales por agrupación (orden desc; desempate alfabético)
   const tablaTotales = useMemo(()=>{
@@ -74,14 +133,39 @@ export default function App(){
   // Helpers refs
   let jurInputRef=null, agrInputRef=null;
 
-  const agregarJurado=()=>{
-    const n = (jurInputRef?.value || '').trim(); if(!n) return;
-    if(jurados.some(j=>j.name===n)) return alert('Ese jurado ya existe');
-    const pin = generatePIN();
-    setJurados(prev=>[...prev,{name:n,pin}]);
-    alert('Jurado agregado: '+n+'  PIN: '+pin);
-    if(jurInputRef){ jurInputRef.value=''; jurInputRef.focus(); }
-  };
+  const agregarJurado = async () => {
+
+  const n = (jurInputRef?.value || '').trim();
+
+  if(!n) return;
+
+  if(jurados.some(j=>j.name===n)) {
+    return alert('Ese jurado ya existe');
+  }
+
+  const pin = generatePIN();
+
+  const nuevosJurados = [...jurados, { name:n, pin }];
+
+  setJurados(nuevosJurados);
+
+  await setDoc(doc(db, "concurso", "datos"), {
+
+    evento,
+    jurados: nuevosJurados,
+    agrupaciones,
+    evaluaciones,
+    bloqueado
+
+  });
+
+  alert('Jurado agregado: ' + n + '  PIN: ' + pin);
+
+  if(jurInputRef){
+    jurInputRef.value = '';
+    jurInputRef.focus();
+  }
+};
   const eliminarJurado=(name)=>setJurados(jurados.filter(j=>j.name!==name));
 
   const agregarAgrupacion=()=>{
